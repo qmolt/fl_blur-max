@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.11.35312.102
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "flblur~", "flblur~.vcxproj", "{BFCCAEA3-486D-464D-BD69-CAD0947DC137}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		MaxDebug|x64 = MaxDebug|x64
+		MaxDebug|x86 = MaxDebug|x86
+		MaxRelease|x64 = MaxRelease|x64
+		MaxRelease|x86 = MaxRelease|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BFCCAEA3-486D-464D-BD69-CAD0947DC137}.MaxDebug|x64.ActiveCfg = MaxDebug|x64
+		{BFCCAEA3-486D-464D-BD69-CAD0947DC137}.MaxDebug|x64.Build.0 = MaxDebug|x64
+		{BFCCAEA3-486D-464D-BD69-CAD0947DC137}.MaxDebug|x86.ActiveCfg = MaxDebug|Win32
+		{BFCCAEA3-486D-464D-BD69-CAD0947DC137}.MaxDebug|x86.Build.0 = MaxDebug|Win32
+		{BFCCAEA3-486D-464D-BD69-CAD0947DC137}.MaxRelease|x64.ActiveCfg = MaxRelease|x64
+		{BFCCAEA3-486D-464D-BD69-CAD0947DC137}.MaxRelease|x64.Build.0 = MaxRelease|x64
+		{BFCCAEA3-486D-464D-BD69-CAD0947DC137}.MaxRelease|x86.ActiveCfg = MaxRelease|Win32
+		{BFCCAEA3-486D-464D-BD69-CAD0947DC137}.MaxRelease|x86.Build.0 = MaxRelease|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5FA4A7A7-BEDE-4B34-917B-D9D571D1FCA0}
+	EndGlobalSection
+EndGlobal
