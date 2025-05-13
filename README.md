@@ -7,4 +7,4 @@ The weights are determined by an internal window. The shape of the window can be
 # Notes / To do list
 
 - Technically there's no need of a delayed frame, it can be removed at the cost of more processing power, because the frame vector should be traversed twice with the present accumulation method. To do: try addressing neighbors for each index in the output vector.
-- An buffer can be made to add an horizontal blur, it should spend a lot of memory but the result shouldn't be that different from the result of a fedbacked delay on the time domain before being processed by this object.
+- A buffer can be made to add an horizontal blur, it should spend a lot of memory and the result shouldn't be that different from the result of a fedbacked delay on the time domain before being processed by this object.

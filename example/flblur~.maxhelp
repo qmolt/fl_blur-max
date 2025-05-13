@@ -79,18 +79,6 @@
 			}
 , 			{
 				"box" : 				{
-					"id" : "obj-23",
-					"linecount" : 6,
-					"maxclass" : "comment",
-					"numinlets" : 1,
-					"numoutlets" : 0,
-					"patching_rect" : [ 545.0, 140.5, 74.0, 89.0 ],
-					"text" : "modes:\n0 - gaussian\n1 - triangle\n2 - cos\n3 - half sin\n4 - pow4"
-				}
-
-			}
-, 			{
-				"box" : 				{
 					"id" : "obj-19",
 					"maxclass" : "newobj",
 					"numinlets" : 1,
