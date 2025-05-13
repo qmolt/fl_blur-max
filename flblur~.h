@@ -58,16 +58,3 @@ void fl_blur_dsp64(t_fl_blur *x, t_object *dsp64, short *count, double samplerat
 void fl_blur_perform64(t_fl_blur *x, t_object *dsp64, double **inputs, long numinputs, double **outputs, long numoutputs, long vectorsize, long flags, void *userparams);
 
 #endif
-
-/*
-scrubber
-	general fft stuff
-infofft
-	only work in pfft env
-
-- an array of 2 frame vectors are made so to store the present vector and to process and ouput the last one already stored.
-- a delayed frame can be removed and the present vector be used to calculate the output but only at the cost of more processing power, 
-to do so the frame vector should be traversed at least twice.
-- an even bigger array of vectors can be made to add an horizontal blur, 
-to achieve this a lot of memory should be spent and the result shouldn't be that different from the result of a fedbacked delay on the time domain before being processed by this object.
-*/

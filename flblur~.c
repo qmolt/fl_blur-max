@@ -143,7 +143,7 @@ void fl_blur_wmake(t_fl_blur *x, t_symbol *msg, short argc, t_atom *argv)
 	if (atom_gettype(ap) != A_FLOAT && atom_gettype(ap) != A_LONG) { object_error((t_object *)x, "mode: argument must be a number"); return; }
 
 	mode = (long)atom_getlong(ap);
-	if (mode < 0) { object_error((t_object *)x, "mode: argument must be equal or more than 0"); return; }
+	if (mode < 0 || mode > 5) { object_warn((t_object *)x, "mode: argument must be equal or more than 0 and less than 5"); return; }
 
 	switch (mode) {
 	case BMODE_GAUSSIAN:
