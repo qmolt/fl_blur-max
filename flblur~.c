@@ -1,5 +1,9 @@
 #include "flblur~.h"
 
+t_symbol *ps_spfft;
+static t_class *fl_blur_class;
+int blur_warning;
+
 void ext_main(void *r)
 {
 	t_class *c = class_new("flblur~", (method)fl_blur_new, (method)fl_blur_free, sizeof(t_fl_blur), 0, A_GIMME, 0);
@@ -30,24 +34,42 @@ void *fl_blur_new(t_symbol *s, short argc, t_atom *argv)
 	dsp_setup((t_pxobject *)x, NUM_INLETS);
 	outlet_new((t_object *)x, "signal");
 	outlet_new((t_object *)x, "signal");
-	x->obj.z_misc |= Z_NO_INPLACE;
+	x->obj.z_misc |= Z_NO_INPLACE | Z_PUT_FIRST;
+
+	x->x_fftsize = 0;
+	x->x_n = 0;
+	x->x_fs = sys_getsr();
+	x->x_fullspect = 0;
 
 	x->i_now = 0;
 	x->brange = DEFAULT_BIN_RANGE;
 	x->bmode = DEFAULT_BLUR_MODE;
+	x->r_per_bin = NULL;
+	x->r_max = 0;
 
-	x->x_n = DEFAULT_FRAMESIZE;
+	x->p_amp_buffer = NULL;
+	x->p_pha_buffer = NULL;
 
 	x->wei_length = DEFAULT_WEIGHT_LENGTH;
 	x->wei_buffer = (double *)sysmem_newptr(DEFAULT_WEIGHT_LENGTH * sizeof(double));
 	if (x->wei_buffer) {
 		for (long i = 0; i < DEFAULT_WEIGHT_LENGTH; i++) {
-			x->wei_buffer[i] = exp(-pow((i / (double)(DEFAULT_WEIGHT_LENGTH - 1.0)) - 0.5, 2.0) / 0.04);
+			double xi = i / (double)(DEFAULT_WEIGHT_LENGTH - 1.0);
+			x->wei_buffer[i] = exp(-pow(xi - 0.5, 2.0) / 0.04);
 		}
 	}
 	else { object_error((t_object *)x, "no memory for weight buffer"); }
 
-	fl_blur_init_memory(x);
+	x->x_pfft = (t_pfftpub *)ps_spfft->s_thing;
+	if (x->x_pfft) {
+		x->x_fftsize = x->x_pfft->x_fftsize;
+		//x->x_ffthop = x->x_pfft->x_ffthop;
+		x->x_fullspect = x->x_pfft->x_fullspect ? 1 : 0;
+		x->x_n = x->x_fullspect ? x->x_fftsize : x->x_fftsize / 2;
+
+		fl_blur_init_memory(x);
+		fl_blur_update_rbins(x);
+	}
 
 	return x;
 }
@@ -57,7 +79,6 @@ void fl_blur_init_memory(t_fl_blur *x)
 	long framesize = x->x_n;
 
 	if (framesize <= 0) { object_error((t_object *)x, "bad frame size: %d", framesize); return; }
-	//object_post((t_object *)x, "frame size: %d", framesize);
 
 	if (!x->p_amp_buffer) { 
 		x->p_amp_buffer = (double **)sysmem_newptr(2 * sizeof(double *)); 
@@ -84,12 +105,43 @@ void fl_blur_init_memory(t_fl_blur *x)
 		else { x->p_pha_buffer[1] = (double *)sysmem_resizeptr(x->p_pha_buffer[1], framesize * sizeof(double)); }
 	}
 
+	if (!x->r_per_bin) { x->r_per_bin = (long *)sysmem_newptr(framesize * sizeof(long)); }
+	else{ x->r_per_bin = (long *)sysmem_resizeptr(x->r_per_bin, framesize * sizeof(long)); }
+
+	if (!x->p_amp_buffer || !x->p_amp_buffer[0] || !x->p_amp_buffer[1] ||
+		!x->p_pha_buffer || !x->p_pha_buffer[0] || !x->p_pha_buffer[1] ||
+		!x->r_per_bin) {
+		object_error((t_object *)x, "fl_blur_init_memory: allocation failed");
+		return;
+	}
+
 	for (long i = 0; i < framesize; i++) {
 		x->p_amp_buffer[0][i] = 0.0;
 		x->p_amp_buffer[1][i] = 0.0;
 		x->p_pha_buffer[0][i] = 0.0;
 		x->p_pha_buffer[1][i] = 0.0;
+		x->r_per_bin[i] = 0;
 	}
+}
+
+void fl_blur_update_rbins(t_fl_blur *x) {
+	if (!x->r_per_bin || x->x_n <= 0 || x->x_fftsize <= 0 || x->x_fs <= 0.0) { return; }
+
+	double delta_f = x->x_fs / (double)x->x_fftsize;
+	double nyquist = x->x_fs / 2.0;
+	long r_max = 0;
+
+	for (long i = 0; i < x->x_n; i++) {
+		double fc_raw = (double)i * x->x_fs / (double)x->x_fftsize;
+		double fc = (x->x_fullspect && fc_raw > nyquist) ? (x->x_fs - fc_raw) : fc_raw;
+		double erb = 24.7 * (4.37 * fc / 1000.0 + 1.0);
+		long r = (long)round(x->brange * erb / delta_f);
+
+		if (r < 0) { r = 0; }
+		x->r_per_bin[i] = r;
+		if (r > r_max) { r_max = r; }
+	}
+	x->r_max = r_max;
 }
 
 void fl_blur_bang(t_fl_blur *x) {}
@@ -118,15 +170,16 @@ void fl_blur_brange(t_fl_blur *x, t_symbol *msg, short argc, t_atom *argv)
 {
 	t_atom *ap = argv;
 	long ac = argc;
-	long range;
+	double range;
 
 	if (ac != 1) { object_error((t_object *)x, "range: only 1 argument"); return; }
 	if (atom_gettype(ap) != A_FLOAT && atom_gettype(ap) != A_LONG) { object_error((t_object *)x, "range: argument must be a number"); return; }
 
-	range = (long)atom_getlong(ap);
-	if (range < 0) { object_warn((t_object *)x, "range: argument must be equal or more than 0"); return; }
+	range = (double)atom_getfloat(ap);
+	if (range < 0.0) { object_warn((t_object *)x, "range: argument can't be negative"); return; }
 
 	x->brange = range;
+	fl_blur_update_rbins(x);
 }
 
 void fl_blur_wmake(t_fl_blur *x, t_symbol *msg, short argc, t_atom *argv)
@@ -135,7 +188,6 @@ void fl_blur_wmake(t_fl_blur *x, t_symbol *msg, short argc, t_atom *argv)
 	long ac = argc;
 	long mode;
 	double xi;
-	double val;
 	double *p_wbuffer = x->wei_buffer;
 	long wsize = x->wei_length;
 
@@ -143,42 +195,37 @@ void fl_blur_wmake(t_fl_blur *x, t_symbol *msg, short argc, t_atom *argv)
 	if (atom_gettype(ap) != A_FLOAT && atom_gettype(ap) != A_LONG) { object_error((t_object *)x, "mode: argument must be a number"); return; }
 
 	mode = (long)atom_getlong(ap);
-	if (mode < BMODE_GAUSSIAN || mode > BMODE_POW) { object_warn((t_object *)x, "mode: argument must be equal or more than 0 and less than 5"); return; }
+	if (mode < BMODE_GAUSSIAN || mode > BMODE_POW) { object_warn((t_object *)x, "mode: argument must be a number (0 to 5)"); return; }
 
 	switch (mode) {
 	case BMODE_GAUSSIAN:
 		for (long i = 0; i < wsize; i++) {
 			xi = i / (double)(wsize - 1.0);
-			val = exp( - pow(xi - 0.5, 2) / 0.04);
-			p_wbuffer[i] = val;
+			p_wbuffer[i] = exp(-pow(xi - 0.5, 2) / 0.04);
 		}
 		break;
 	case BMODE_TRIANGLE:
 		for (long i = 0; i < wsize; i++) {
 			xi = i / (double)(wsize - 1.0);
-			val = 1.0 - fabs(1.0 - 2.0 * xi);
-			p_wbuffer[i] = val;
+			p_wbuffer[i] = 1.0 - fabs(1.0 - 2.0 * xi);
 		}
 		break;
 	case BMODE_COS:
 		for (long i = 0; i < wsize; i++) {
 			xi = i / (double)(wsize - 1.0);
-			val = 0.5 + 0.5 * cos(PI * (1.0 + 2.0 * xi));
-			p_wbuffer[i] = val;
+			p_wbuffer[i] = 0.5 + 0.5 * cos(PI * (1.0 + 2.0 * xi));
 		}
 		break;
 	case BMODE_HALFSIN:
 		for (long i = 0; i < wsize; i++) {
 			xi = i / (double)(wsize - 1.0);
-			val = sin(PI * xi);
-			p_wbuffer[i] = val;
+			p_wbuffer[i] = sin(PI * xi);
 		}
 		break;
 	case BMODE_POW:
 		for (long i = 0; i < wsize; i++) {
 			xi = i / (double)(wsize - 1.0);
-			val = 1.0 - pow(1.0 - 2.0 * xi, 4.0);
-			p_wbuffer[i] = val;
+			p_wbuffer[i] = 1.0 - pow(1.0 - 2.0 * xi, 4.0);
 		}
 		break;
 	default:
@@ -202,33 +249,37 @@ void fl_blur_free(t_fl_blur *x)
 		if (x->p_pha_buffer[1]) { sysmem_freeptr(x->p_pha_buffer[1]); }
 		sysmem_freeptr(x->p_pha_buffer);
 	}
-	sysmem_freeptr(x->wei_buffer);
+	if (x->r_per_bin) { sysmem_freeptr(x->r_per_bin); }
+	if (x->wei_buffer) { sysmem_freeptr(x->wei_buffer); }
 }
 
 void fl_blur_dsp64(t_fl_blur *x, t_object *dsp64, short *count, double samplerate, long maxvectorsize, long flags)
 {
-	x->amp_connected = count[0];
-	x->pha_connected = count[1];
+	x->amp_connected = count[I_AMP_INPUT];
+	x->pha_connected = count[I_PHA_INPUT];
 
 	if (!x->x_pfft) {
 		x->x_pfft = (t_pfftpub *)ps_spfft->s_thing;
 	}
 	if (x->x_pfft) {
-		//x->x_fullspect = x->x_pfft->x_fullspect ? 1 : 0;
+		x->x_fullspect = x->x_pfft->x_fullspect ? 1 : 0;
 		//x->x_ffthop = x->x_pfft->x_ffthop;
-		x->x_n = maxvectorsize;
-		//x->x_fftsize = x->x_pfft->x_fftsize;
+		x->x_fftsize = x->x_pfft->x_fftsize;
 
-		fl_blur_init_memory(x);
+		if (x->x_n != maxvectorsize) {
+			x->x_n = maxvectorsize;
+			fl_blur_init_memory(x);
+			fl_blur_update_rbins(x);
+		}
 	}
 	else if (blur_warning) {
-		object_warn((t_object *)x, "flblur~ only functions inside a pfft~", 0);
+		object_warn((t_object *)x, "flblur~ only functions inside a pfft~");
 		blur_warning = 0;
 	}
 
-	if (x->x_n != maxvectorsize) {
-		x->x_n = maxvectorsize;
-		fl_blur_init_memory(x);
+	if (x->x_fs != samplerate) {
+		x->x_fs = samplerate;
+		fl_blur_update_rbins(x);
 	}
 
 	object_method(dsp64, gensym("dsp_add64"), x, fl_blur_perform64, 0, NULL);
@@ -238,28 +289,28 @@ void fl_blur_perform64(t_fl_blur *x, t_object *dsp64, double **inputs, long numi
 {
 	long n = vectorsize;
 
-	t_double *amp_in = inputs[0];
-	t_double *pha_in = inputs[1];
-	t_double *amp_out = outputs[0];
-	t_double *pha_out = outputs[1];
+	t_double *amp_in = inputs[I_AMP_INPUT];
+	t_double *pha_in = inputs[I_PHA_INPUT];
+	t_double *amp_out = outputs[O_AMP_OUTPUT];
+	t_double *pha_out = outputs[O_PHA_OUTPUT];
 
 	long j;
-	float rat_weight;
-	float f_weight;
+	double rat_weight;
+	double f_weight;
 	long i_weight;
 	long next_i_weight;
-	long max_i_weight = x->wei_length - 1;
-	long r = x->brange;
-	float interp;
+	long r;
+	double interp;
 	double w_val;
 
 	double amp_val;
 	double pha_val;
 
+	long max_wi = x->wei_length - 1;
+	long max_bin = n - 1;
+
 	long i_past = x->i_now;
 	long i_now = (i_past + 1) % 2;
-
-	long max_i_frame = n - 1;
 
 	short amp_connected = x->amp_connected;
 	short pha_connected = x->pha_connected;
@@ -269,9 +320,10 @@ void fl_blur_perform64(t_fl_blur *x, t_object *dsp64, double **inputs, long numi
 	double *pha_now = x->p_pha_buffer[i_now];
 	double *pha_past = x->p_pha_buffer[i_past];
 	double *weight = x->wei_buffer;	
+	long *r_per_bin = x->r_per_bin;
 
 	while (n--) {
-		
+
 		if (amp_connected) { amp_val = (double)(*amp_in++); }
 		else { amp_val = 0.0; }
 		if (pha_connected) { pha_val = (double)(*pha_in++); }
@@ -280,25 +332,34 @@ void fl_blur_perform64(t_fl_blur *x, t_object *dsp64, double **inputs, long numi
 		//store the phase vector (unaffected phase version)
 		//pha_now[n] = pha_val;
 
+		r = x->r_per_bin[n];
+
 		//process input, store it to retrieve it next frame
-		for (long i = -r; i <= r; i++) {
-			j = n + i;
-			if (j < 0) { continue; }
-			if (j > max_i_frame) { continue; }
-
-			rat_weight = (float)((i + MAX(r, 1.0)) / (2.0 * MAX(r, 1.0)));
-			f_weight = max_i_weight * rat_weight;
-			i_weight = (long)trunc(f_weight);
-			if (i_weight < 0) { i_weight = 0; }
-			interp = f_weight - i_weight;
-
-			next_i_weight = i_weight + 1;
-			if (next_i_weight > max_i_weight) { next_i_weight = max_i_weight; }
-			w_val = weight[next_i_weight] + interp * (weight[i_weight] - weight[next_i_weight]);
-			
-			amp_now[j] += amp_val * w_val;
-			pha_now[j] += pha_val * w_val; //processed phase version
+		if (r == 0) {
+			amp_now[n] += amp_val;
+			pha_now[n] += pha_val;
 		}
+		else {
+			for (long i = -r; i <= r; i++) {
+				j = n + i;
+				if (j < 0) { continue; }
+				if (j > max_bin) { continue; }
+
+				rat_weight = ((i + r) / (2.0 * MAX(r, 1.0)));
+				f_weight = max_wi * rat_weight;
+				i_weight = (long)trunc(f_weight);
+				if (i_weight < 0) { i_weight = 0; }
+				interp = f_weight - i_weight;
+
+				next_i_weight = i_weight + 1;
+				if (next_i_weight > max_wi) { next_i_weight = max_wi; }
+				w_val = weight[next_i_weight] + interp * (weight[i_weight] - weight[next_i_weight]);
+
+				amp_now[j] += amp_val * w_val;
+				pha_now[j] += pha_val * w_val; //processed phase version
+			}
+		}
+
 		//retrieve last frame
 		amp_val = amp_past[n];
 		pha_val = pha_past[n];
