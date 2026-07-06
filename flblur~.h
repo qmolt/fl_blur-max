@@ -37,6 +37,8 @@ typedef struct _fl_blur {
 	long wei_length;
 	double *wei_buffer;
 
+	double *norm_per_bin;
+
 	long *r_per_bin;
 	long r_max;
 

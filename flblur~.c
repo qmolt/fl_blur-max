@@ -107,6 +107,9 @@ void fl_blur_init_memory(t_fl_blur *x)
 
 	if (!x->r_per_bin) { x->r_per_bin = (long *)sysmem_newptr(framesize * sizeof(long)); }
 	else{ x->r_per_bin = (long *)sysmem_resizeptr(x->r_per_bin, framesize * sizeof(long)); }
+	
+	if (!x->norm_per_bin) { x->norm_per_bin = (double *)sysmem_newptr(framesize * sizeof(double)); }
+	else { x->norm_per_bin = (double *)sysmem_resizeptr(x->norm_per_bin, framesize * sizeof(double)); }
 
 	if (!x->p_amp_buffer || !x->p_amp_buffer[0] || !x->p_amp_buffer[1] ||
 		!x->p_pha_buffer || !x->p_pha_buffer[0] || !x->p_pha_buffer[1] ||
@@ -142,6 +145,38 @@ void fl_blur_update_rbins(t_fl_blur *x) {
 		if (r > r_max) { r_max = r; }
 	}
 	x->r_max = r_max;
+
+	//normalize
+	long dist;
+	double weight_sum;
+	long r;
+	double rat_weight;
+	double f_weight;
+	long i_weight;
+	double interp;
+	long next_i_weight;
+	for (long i = 0; i < x->x_n; i++) {
+		weight_sum = 0.0;
+
+		for (long b = 0; b < x->x_n; b++) {
+			r = x->r_per_bin[b];
+			if (r == 0) {
+				if (b == i) { weight_sum += 1.0; }
+				continue;
+			}
+			dist = i - b;
+			if (dist < -r || dist > r) { continue; }
+
+			rat_weight = (double)(dist + r) / (2.0 * (double)r);
+			f_weight = (double)(x->wei_length - 1) * rat_weight;
+			i_weight = (long)trunc(f_weight);
+			if (i_weight < 0) { i_weight = 0; }
+			interp = f_weight - i_weight;
+			next_i_weight = (i_weight + 1 > x->wei_length - 1) ? x->wei_length - 1 : i_weight + 1;
+			weight_sum += x->wei_buffer[next_i_weight] + interp * (x->wei_buffer[i_weight] - x->wei_buffer[next_i_weight]);
+		}
+		x->norm_per_bin[i] = (weight_sum > 0.0) ? 1.0 / weight_sum : 1.0;
+	}
 }
 
 void fl_blur_bang(t_fl_blur *x) {}
@@ -250,6 +285,7 @@ void fl_blur_free(t_fl_blur *x)
 		sysmem_freeptr(x->p_pha_buffer);
 	}
 	if (x->r_per_bin) { sysmem_freeptr(x->r_per_bin); }
+	if (x->norm_per_bin) { sysmem_freeptr(x->norm_per_bin); }
 	if (x->wei_buffer) { sysmem_freeptr(x->wei_buffer); }
 }
 
@@ -360,13 +396,9 @@ void fl_blur_perform64(t_fl_blur *x, t_object *dsp64, double **inputs, long numi
 			}
 		}
 
-		//retrieve last frame
-		amp_val = amp_past[n];
-		pha_val = pha_past[n];
-
 		//output
-		*amp_out++ = amp_val;
-		*pha_out++ = pha_val;
+		*amp_out++ = amp_past[n] * x->norm_per_bin[n];
+		*pha_out++ = pha_past[n];
 
 		//reset buffer to accumulate the sum the next frame
 		amp_past[n] = 0.0;
